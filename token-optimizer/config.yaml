@@ -1,0 +1,62 @@
+# Token Optimizer Configuration
+
+# Token thresholds
+session_token_warning: 100000      # Warn when session approaches this
+session_token_critical: 150000     # Critical: suggest snapshot + clear
+session_token_limit: 180000        # Hard limit: force summarization
+
+# Memory relevance thresholds
+memory_relevance_threshold: 0.3    # Below this: don't auto-load
+memory_auto_load_max: 20           # Max memories to auto-load per session
+
+# Mind-map settings
+mindmap:
+  max_nodes_display: 50            # Max nodes in mind-map view
+  edge_types:
+    - contains
+    - relates-to
+    - depends-on
+    - supersedes
+    - references
+    - implements
+    - documents
+  layout: "force-directed"         # or "hierarchical", "circular"
+
+# Consolidation settings
+consolidation:
+  similarity_threshold: 0.85       # Merge memories above this similarity
+  archive_after_days:
+    high: 90
+    medium: 60
+    low: 30
+  max_memories_per_concept: 20     # Cap per concept node
+  auto_consolidate_on_save: true
+  require_confirmation: true
+  backup_retention_days: 30
+
+# Auto-save settings
+auto_save:
+  on_session_end: true
+  interval_minutes: 30             # Periodic checkpoint
+  on_token_critical: true          # Save when critical threshold hit
+
+# Token estimation
+estimation:
+  calibration_factor: 1.0          # Project-specific multiplier
+  tokens_per_line: 20
+  tokens_per_exchange: 350
+  tokens_per_memory: 200
+  base_overhead: 20000
+
+# Display preferences
+display:
+  show_budget_bar: true
+  show_mindmap_ascii: true
+  compact_mode: false
+  color_output: true
+
+# Integration
+integration:
+  respect_native_memory: true      # Use ~/.claude/projects/*/memory/
+  enhance_not_replace: true        # Add mind-map layer on top
+  sync_memory_index: true          # Keep MEMORY.md updated
