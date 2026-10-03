@@ -118,6 +118,144 @@ class MindMap:
             self.updated = datetime.now().isoformat()
 
 
+# ─── Session State & Auto-Load ────────────────────────────────────────────────
+
+@dataclass
+class SessionState:
+    """Tracks session-level state for auto-loading."""
+    session_id: str
+    project_slug: str
+    memories_loaded: bool = False
+    loaded_memory_names: List[str] = field(default_factory=list)
+    auto_load_context: str = ""
+    created: str = ""
+    last_command: str = ""
+
+    def __post_init__(self):
+        if not self.created:
+            self.created = datetime.now().isoformat()
+
+    def to_dict(self) -> Dict:
+        return asdict(self)
+
+    @classmethod
+    def from_dict(cls, data: Dict) -> 'SessionState':
+        return cls(**data)
+
+
+def get_session_state_path(project_slug: str = None) -> Path:
+    """Get the session state file path."""
+    if project_slug is None:
+        project_slug = get_project_slug()
+    return get_memory_dir(project_slug).parent / "session_state.json"
+
+
+def load_session_state(project_slug: str = None) -> SessionState:
+    """Load session state from JSON file."""
+    path = get_session_state_path(project_slug)
+    if path.exists():
+        with open(path) as f:
+            data = json.load(f)
+        return SessionState.from_dict(data)
+    # Create new session state
+    return SessionState(
+        session_id=f"sess-{datetime.now():%Y%m%d-%H%M%S}",
+        project_slug=get_project_slug()
+    )
+
+
+def save_session_state(state: SessionState, project_slug: str = None):
+    """Save session state to JSON file."""
+    path = get_session_state_path(project_slug)
+    path.write_text(json.dumps(state.to_dict(), indent=2))
+
+
+def detect_auto_load_context(project_slug: str = None) -> str:
+    """Detect context for auto-loading from recent activity."""
+    # Check recent git changes
+    try:
+        import subprocess
+        result = subprocess.run(
+            ["git", "diff", "--name-only", "HEAD~5..HEAD"],
+            capture_output=True, text=True, cwd=Path.cwd()
+        )
+        if result.returncode == 0 and result.stdout.strip():
+            files = result.stdout.strip().split('\n')
+            # Extract key directories/topics
+            topics = set()
+            for f in files:
+                parts = f.split('/')
+                if len(parts) > 1:
+                    topics.add(parts[0])
+                if len(parts) > 2:
+                    topics.add(parts[1])
+            if topics:
+                return " ".join(sorted(topics)[:5])
+    except Exception:
+        pass
+
+    # Check current directory name
+    cwd_name = Path.cwd().name.lower()
+    if cwd_name and cwd_name not in ['home', 'users', 'appi', 'downloads']:
+        return cwd_name
+
+    return "general"
+
+
+def auto_load_memories_if_needed(project_slug: str = None) -> Tuple[bool, List[Memory], str]:
+    """
+    Auto-load relevant memories if not already loaded this session.
+    Returns: (was_loaded, memories, context_used)
+    """
+    state = load_session_state(project_slug)
+
+    if state.memories_loaded:
+        # Already loaded, return existing
+        memories = load_memories(project_slug)
+        loaded = [m for m in memories if m.name in state.loaded_memory_names]
+        return True, loaded, state.auto_load_context
+
+    # Detect context
+    context = detect_auto_load_context(project_slug)
+    state.auto_load_context = context
+
+    # Load relevant memories
+    memories = load_memories(project_slug)
+    topic_lower = context.lower()
+    topic_words = set(topic_lower.split())
+
+    scored = []
+    for mem in memories:
+        score = 0
+        text = f"{mem.name} {mem.description} {' '.join(mem.tags)}".lower()
+
+        for word in topic_words:
+            if word in text:
+                score += 2
+
+        if mem.relevance == "high":
+            score += 3
+        elif mem.relevance == "medium":
+            score += 1
+
+        for tag in mem.tags:
+            if tag in topic_lower:
+                score += 2
+
+        if score > 0:
+            scored.append((score, mem))
+
+    scored.sort(key=lambda x: -x[0])
+    top_memories = [m for _, m in scored[:20]]
+
+    # Update state
+    state.memories_loaded = True
+    state.loaded_memory_names = [m.name for m in top_memories]
+    save_session_state(state, project_slug)
+
+    return False, top_memories, context
+
+
 # ─── Session Activity Tracking ────────────────────────────────────────────────
 
 @dataclass
@@ -477,41 +615,46 @@ def format_budget(budget: Dict[str, int]) -> str:
 
 def cmd_load(args, config):
     """Load relevant memories for a topic."""
+    # Auto-load if not already loaded
+    was_loaded, auto_memories, context = auto_load_memories_if_needed()
+
     topic = args.topic or ""
     memories = load_memories()
 
-    # Score memories by relevance to topic
-    scored = []
-    topic_lower = topic.lower()
+    # If user specified a topic, use it; otherwise use auto-detected context
+    effective_topic = topic or context
+    topic_lower = effective_topic.lower()
     topic_words = set(topic_lower.split())
 
+    scored = []
     for mem in memories:
         score = 0
         text = f"{mem.name} {mem.description} {' '.join(mem.tags)}".lower()
 
-        # Keyword matching
         for word in topic_words:
             if word in text:
                 score += 2
 
-        # Relevance bonus
         if mem.relevance == "high":
             score += 3
         elif mem.relevance == "medium":
             score += 1
 
-        # Tag matching
         for tag in mem.tags:
             if tag in topic_lower:
                 score += 2
 
-        if score > 0 or not topic:
+        if score > 0 or not effective_topic:
             scored.append((score, mem))
 
     scored.sort(key=lambda x: -x[0])
     top_memories = [m for _, m in scored[:config.get("memory_auto_load_max", 20)]]
 
-    print(f"📚 Loaded {len(top_memories)} memories for topic: '{topic or 'all'}'")
+    # Show auto-load message if it happened
+    if not was_loaded and auto_memories:
+        print(f"🔄 Auto-loaded {len(auto_memories)} memories for context: '{context}'")
+
+    print(f"📚 Loaded {len(top_memories)} memories for topic: '{effective_topic or 'all'}'")
     for mem in top_memories:
         print(f"  • {mem.name} — {mem.description}")
 
@@ -526,6 +669,9 @@ def cmd_save(args, config):
 
 def cmd_budget(args, config):
     """Show token budget estimate."""
+    # Auto-load memories for accurate count
+    auto_load_memories_if_needed()
+
     # These would come from session tracking in real usage
     budget = estimate_tokens(config,
         exchanges=args.exchanges or 10,
@@ -538,6 +684,8 @@ def cmd_budget(args, config):
 
 def cmd_mindmap(args, config):
     """Show mind-map visualization."""
+    # Auto-load for context
+    auto_load_memories_if_needed()
     mindmap = load_mindmap()
 
     if args.concept:
@@ -576,6 +724,7 @@ def cmd_mindmap(args, config):
 
 def cmd_consolidate(args, config):
     """Consolidate duplicate/related memories."""
+    auto_load_memories_if_needed()
     memories = load_memories()
     mindmap = load_mindmap()
 
@@ -613,6 +762,7 @@ def cmd_consolidate(args, config):
 
 def cmd_stats(args, config):
     """Show memory/mind-map statistics."""
+    auto_load_memories_if_needed()
     memories = load_memories()
     mindmap = load_mindmap()
 
@@ -642,12 +792,14 @@ def cmd_stats(args, config):
 
 def cmd_prune(args, config):
     """Prune low-relevance context."""
+    auto_load_memories_if_needed()
     print("✂️  Pruning low-relevance memories...")
     print("   (Would remove memories below relevance threshold from active context)")
     print(f"   Threshold: {config.get('memory_relevance_threshold', 0.3)}")
 
 def cmd_export(args, config):
     """Export memories for backup."""
+    auto_load_memories_if_needed()
     memories = load_memories()
     mindmap = load_mindmap()
 
@@ -672,6 +824,22 @@ def cmd_export(args, config):
     output = Path(args.output) if args.output else Path(f"token-optimizer-export-{datetime.now():%Y%m%d-%H%M%S}.json")
     output.write_text(json.dumps(export, indent=2))
     print(f"✅ Exported {len(memories)} memories to {output}")
+
+
+def cmd_reset(args, config):
+    """Reset session state (for testing auto-load)."""
+    project_slug = get_project_slug()
+    state_path = get_session_state_path(project_slug)
+    activity_path = get_session_log_path(project_slug)
+
+    for p in [state_path, activity_path]:
+        if p.exists():
+            p.unlink()
+            print(f"🗑️  Removed {p}")
+        else:
+            print(f"   {p} not found")
+
+    print("✅ Session state reset — next command will auto-load fresh")
 
 # ─── Main ──────────────────────────────────────────────────────────────────
 
@@ -712,6 +880,9 @@ def main():
     p_export = subparsers.add_parser("export", help="Export memories")
     p_export.add_argument("-o", "--output", help="Output file path")
 
+    # reset
+    subparsers.add_parser("reset", help="Reset session state (for testing auto-load)")
+
     args = parser.parse_args()
     config = load_config()
 
@@ -729,6 +900,7 @@ def main():
         "stats": cmd_stats,
         "prune": cmd_prune,
         "export": cmd_export,
+        "reset": cmd_reset,
     }
 
     if args.command in commands:
