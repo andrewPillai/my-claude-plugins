@@ -40,8 +40,10 @@ class SessionWatcher(FileSystemEventHandler):
             return
 
         path = Path(event.src_path)
+        print(f"[DEBUG] on_created: {path}")
         # Watch for new session JSON files
         if path.suffix == '.json' and 'session' in path.name.lower():
+            print(f"[DEBUG] Session file detected: {path}")
             self.check_and_trigger(path)
 
     def on_modified(self, event):
@@ -49,7 +51,9 @@ class SessionWatcher(FileSystemEventHandler):
             return
 
         path = Path(event.src_path)
+        print(f"[DEBUG] on_modified: {path}")
         if path.suffix == '.json' and 'session' in path.name.lower():
+            print(f"[DEBUG] Session file modified: {path}")
             self.check_and_trigger(path)
 
     def check_and_trigger(self, session_file: Path):
@@ -108,9 +112,12 @@ class SessionWatcher(FileSystemEventHandler):
 
 def find_sessions_dir() -> Path:
     """Find the Claude sessions directory."""
+    # The real session files are in the Application Support directory
+    # with subdirectories for each session. The ~/.claude/sessions is
+    # just a symlink or contains metadata files.
     candidates = [
-        Path.home() / ".claude" / "sessions",
         Path.home() / "Library" / "Application Support" / "Claude-3p" / "local-agent-mode-sessions",
+        Path.home() / ".claude" / "sessions",
     ]
     for c in candidates:
         if c.exists():
@@ -141,6 +148,13 @@ def main():
     observer = Observer()
     observer.schedule(event_handler, str(sessions_dir), recursive=True)
     observer.start()
+
+    # Debug: print initial state
+    print(f"   [DEBUG] Watching recursively: {sessions_dir}")
+    for root, dirs, files in os.walk(sessions_dir):
+        for f in files:
+            if f.endswith('.json') and 'session' in f.lower():
+                print(f"   [DEBUG] Found existing session file: {Path(root) / f}")
 
     try:
         while True:
