@@ -40,10 +40,9 @@ class SessionWatcher(FileSystemEventHandler):
             return
 
         path = Path(event.src_path)
-        print(f"[DEBUG] on_created: {path}")
-        # Watch for new session JSON files
-        if path.suffix == '.json' and 'session' in path.name.lower():
-            print(f"[DEBUG] Session file detected: {path}")
+        # Only watch for session.json files in session directories (e.g., .../00000000/session-xxx/session.json)
+        if path.name == 'session.json' and '00000000' in str(path.parent):
+            print(f"[DEBUG] Session file created: {path}")
             self.check_and_trigger(path)
 
     def on_modified(self, event):
@@ -51,8 +50,8 @@ class SessionWatcher(FileSystemEventHandler):
             return
 
         path = Path(event.src_path)
-        print(f"[DEBUG] on_modified: {path}")
-        if path.suffix == '.json' and 'session' in path.name.lower():
+        # Only watch for session.json files in session directories
+        if path.name == 'session.json' and '00000000' in str(path.parent):
             print(f"[DEBUG] Session file modified: {path}")
             self.check_and_trigger(path)
 
